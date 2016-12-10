@@ -1,11 +1,26 @@
 # signal-cli
 
-signal-cli is a commandline interface for [libsignal-service-java](https://github.com/WhisperSystems/libsignal-service-java). It supports registering, verifying, sending and receiving messages. To be able to receiving messages signal-cli uses a [patched libsignal-service-java](https://github.com/AsamK/libsignal-service-java), because libsignal-service-java [does not yet support registering for the websocket support](https://github.com/WhisperSystems/libsignal-service-java/pull/5) nor [provisioning as a slave device](https://github.com/WhisperSystems/libsignal-service-java/pull/21). For registering you need a phone number where you can receive SMS or incoming calls.
+signal-cli is a commandline interface for [libsignal-service-java](https://github.com/WhisperSystems/libsignal-service-java). It supports registering, verifying, sending and receiving messages. To be able to receive messages signal-cli uses a [patched libsignal-service-java](https://github.com/AsamK/libsignal-service-java), because libsignal-service-java [does not yet support registering for the websocket support](https://github.com/WhisperSystems/libsignal-service-java/pull/5) nor [provisioning as a slave device](https://github.com/WhisperSystems/libsignal-service-java/pull/21). For registering you need a phone number where you can receive SMS or incoming calls.
 It is primarily intended to be used on servers to notify admins of important events. For this use-case, it has a dbus interface, that can be used to send messages from any programming language that has dbus bindings.
+
+## Installation
+
+You can [build signal-cli](#building) yourself, or use the [provided binary files](https://github.com/AsamK/signal-cli/releases/latest), which should work on Linux, macOS and Windows. For Arch Linux there is also a [package in AUR](https://aur.archlinux.org/packages/signal-cli/). You need to have at least JRE 7 installed, to run signal-cli.
+
+### Install system-wide on Linux
+See [latest version](https://github.com/AsamK/signal-cli/releases).
+```sh
+export VERSION=<latest version, format "x.y.z">
+wget https://github.com/AsamK/signal-cli/releases/download/v"${VERSION}"/signal-cli-"${VERSION}".tar.gz
+sudo tar xf signal-cli-"${VERSION}".tar.gz -C /opt
+sudo ln -sf /opt/signal-cli-"${VERSION}"/bin/signal-cli /usr/local/bin/
+```
 
 ## Usage
 
-usage: signal-cli [-h] [-v] [--config CONFIG] [-u USERNAME | --dbus | --dbus-system] {link,addDevice,listDevices,removeDevice,register,verify,send,quitGroup,updateGroup,receive,daemon} ...
+usage: signal-cli [-h] [-v] [--config CONFIG] [-u USERNAME | --dbus | --dbus-system] {link,addDevice,listDevices,removeDevice,register,verify,send,quitGroup,updateGroup,listIdentities,trust,receive,daemon} ...
+
+See also: [man page in asciidoc format](https://github.com/AsamK/signal-cli/blob/master/man/signal-cli.1.txt)
 
 * Register a number (with SMS verification)
 
@@ -39,7 +54,15 @@ usage: signal-cli [-h] [-v] [--config CONFIG] [-u USERNAME | --dbus | --dbus-sys
 
  * Update a group
 
-          signal-cli -u USERNAME updateGroup -g GROUP_ID -n "New group name"
+          signal-cli -u USERNAME updateGroup -g GROUP_ID -n "New group name" -a "AVATAR_IMAGE_FILE"
+
+ * Add member to a group
+
+          signal-cli -u USERNAME updateGroup -g GROUP_ID -m "NEW_MEMBER"
+
+ * Leave a group
+
+          signal-cli -u USERNAME quitGroup -g GROUP_ID
 
  * Send a message to a group
 
@@ -70,6 +93,30 @@ usage: signal-cli [-h] [-v] [--config CONFIG] [-u USERNAME | --dbus | --dbus-sys
 
           signal-cli -u USERNAME removeDevice -d DEVICE_ID
 
+* Manage trusted keys
+
+ * View all known keys
+
+          signal-cli -u USERNAME listIdentities
+
+ * View known keys of one number
+
+          signal-cli -u USERNAME listIdentities -n NUMBER
+
+ * Trust new key, after having verified it
+
+          signal-cli -u USERNAME trust -v FINGER_PRINT NUMBER
+
+ * Trust new key, without having verified it. Only use this if you don't care about security
+
+          signal-cli -u USERNAME trust -a NUMBER
+
+* Set configuration directory
+
+          signal-cli --config=/home/other_user/.config/signal
+
+      This is particularily useful in the case, when you would like to run the signal-cli tool as a different user as the one, that was used to register the account. You should make sure, that the caller has full read/write access to the given directory.
+        
 ## DBus service
 
 signal-cli can run in daemon mode and provides an experimental dbus interface.
@@ -114,7 +161,7 @@ For legacy users, the old config directory is used as a fallback:
 ## Building
 
 This project uses [Gradle](http://gradle.org) for building and maintaining
-dependencies.
+dependencies. If you have a recent gradle version installed, you can replace `./gradlew` with `gradle` in the following steps.
 
 1. Checkout the source somewhere on your filesystem with
 

@@ -13,24 +13,24 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class JsonContactsStore {
-    @JsonProperty("contacts")
-    @JsonSerialize(using = JsonContactsStore.MapToListSerializer.class)
-    @JsonDeserialize(using = ContactsDeserializer.class)
-    private Map<String, ContactInfo> contacts = new HashMap<>();
+public class JsonThreadStore {
+    @JsonProperty("threads")
+    @JsonSerialize(using = JsonThreadStore.MapToListSerializer.class)
+    @JsonDeserialize(using = ThreadsDeserializer.class)
+    private Map<String, ThreadInfo> threads = new HashMap<>();
 
     private static final ObjectMapper jsonProcessor = new ObjectMapper();
 
-    void updateContact(ContactInfo contact) {
-        contacts.put(contact.number, contact);
+    void updateThread(ThreadInfo thread) {
+        threads.put(thread.id, thread);
     }
 
-    ContactInfo getContact(String number) {
-        return contacts.get(number);
+    ThreadInfo getThread(String id) {
+        return threads.get(id);
     }
 
-    List<ContactInfo> getContacts() {
-        return new ArrayList<>(contacts.values());
+    List<ThreadInfo> getThreads() {
+        return new ArrayList<>(threads.values());
     }
 
     public static class MapToListSerializer extends JsonSerializer<Map<?, ?>> {
@@ -40,17 +40,17 @@ public class JsonContactsStore {
         }
     }
 
-    public static class ContactsDeserializer extends JsonDeserializer<Map<String, ContactInfo>> {
+    public static class ThreadsDeserializer extends JsonDeserializer<Map<String, ThreadInfo>> {
         @Override
-        public Map<String, ContactInfo> deserialize(JsonParser jsonParser, DeserializationContext deserializationContext) throws IOException {
-            Map<String, ContactInfo> contacts = new HashMap<>();
+        public Map<String, ThreadInfo> deserialize(JsonParser jsonParser, DeserializationContext deserializationContext) throws IOException {
+            Map<String, ThreadInfo> threads = new HashMap<>();
             JsonNode node = jsonParser.getCodec().readTree(jsonParser);
             for (JsonNode n : node) {
-                ContactInfo c = jsonProcessor.treeToValue(n, ContactInfo.class);
-                contacts.put(c.number, c);
+                ThreadInfo t = jsonProcessor.treeToValue(n, ThreadInfo.class);
+                threads.put(t.id, t);
             }
 
-            return contacts;
+            return threads;
         }
     }
 }

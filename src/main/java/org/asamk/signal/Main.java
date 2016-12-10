@@ -16,10 +16,25 @@
  */
 package org.asamk.signal;
 
-import net.sourceforge.argparse4j.ArgumentParsers;
-import net.sourceforge.argparse4j.impl.Arguments;
-import net.sourceforge.argparse4j.inf.*;
-import org.apache.commons.io.IOUtils;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.StringWriter;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.charset.Charset;
+import java.security.Security;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.TimeZone;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 import org.apache.http.util.TextUtils;
 import org.asamk.Signal;
 import org.freedesktop.dbus.DBusConnection;
@@ -28,7 +43,13 @@ import org.freedesktop.dbus.exceptions.DBusException;
 import org.freedesktop.dbus.exceptions.DBusExecutionException;
 import org.whispersystems.libsignal.InvalidKeyException;
 import org.whispersystems.signalservice.api.crypto.UntrustedIdentityException;
-import org.whispersystems.signalservice.api.messages.*;
+import org.whispersystems.signalservice.api.messages.SignalServiceAttachment;
+import org.whispersystems.signalservice.api.messages.SignalServiceAttachmentPointer;
+import org.whispersystems.signalservice.api.messages.SignalServiceContent;
+import org.whispersystems.signalservice.api.messages.SignalServiceDataMessage;
+import org.whispersystems.signalservice.api.messages.SignalServiceEnvelope;
+import org.whispersystems.signalservice.api.messages.SignalServiceGroup;
+import org.whispersystems.signalservice.api.messages.multidevice.BlockedListMessage;
 import org.whispersystems.signalservice.api.messages.multidevice.DeviceInfo;
 import org.whispersystems.signalservice.api.messages.multidevice.ReadMessage;
 import org.whispersystems.signalservice.api.messages.multidevice.SentTranscriptMessage;
@@ -39,19 +60,21 @@ import org.whispersystems.signalservice.api.push.exceptions.NetworkFailureExcept
 import org.whispersystems.signalservice.api.push.exceptions.UnregisteredUserException;
 import org.whispersystems.signalservice.api.util.PhoneNumberFormatter;
 
-import java.io.File;
-import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.security.Security;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.TimeoutException;
+import net.sourceforge.argparse4j.ArgumentParsers;
+import net.sourceforge.argparse4j.impl.Arguments;
+import net.sourceforge.argparse4j.inf.ArgumentParser;
+import net.sourceforge.argparse4j.inf.ArgumentParserException;
+import net.sourceforge.argparse4j.inf.MutuallyExclusiveGroup;
+import net.sourceforge.argparse4j.inf.Namespace;
+import net.sourceforge.argparse4j.inf.Subparser;
+import net.sourceforge.argparse4j.inf.Subparsers;
 
 public class Main {
 
     public static final String SIGNAL_BUSNAME = "org.asamk.Signal";
     public static final String SIGNAL_OBJECTPATH = "/org/asamk/Signal";
+
+    private static final TimeZone tzUTC = TimeZone.getTimeZone("UTC");
 
     public static void main(String[] args) {
         // Workaround for BKS truststore
@@ -62,6 +85,11 @@ public class Main {
             System.exit(1);
         }
 
+        int res = handleCommands(ns);
+        System.exit(res);
+    }
+
+    private static int handleCommands(Namespace ns) {
         final String username = ns.getString("username");
         Manager m;
         Signal ts;
@@ -85,8 +113,7 @@ public class Main {
                     if (dBusConn != null) {
                         dBusConn.disconnect();
                     }
-                    System.exit(3);
-                    return;
+                    return 3;
                 }
             } else {
                 String settingsPath = ns.getString("config");
@@ -104,11 +131,10 @@ public class Main {
                 ts = m;
                 if (m.userExists()) {
                     try {
-                        m.load();
+                        m.init();
                     } catch (Exception e) {
                         System.err.println("Error loading state file \"" + m.getFileName() + "\": " + e.getMessage());
-                        System.exit(2);
-                        return;
+                        return 2;
                     }
                 }
             }
@@ -117,7 +143,7 @@ public class Main {
                 case "register":
                     if (dBusConn != null) {
                         System.err.println("register is not yet implemented via dbus");
-                        System.exit(1);
+                        return 1;
                     }
                     if (!m.userHasKeys()) {
                         m.createNewIdentity();
@@ -126,33 +152,33 @@ public class Main {
                         m.register(ns.getBoolean("voice"));
                     } catch (IOException e) {
                         System.err.println("Request verify error: " + e.getMessage());
-                        System.exit(3);
+                        return 3;
                     }
                     break;
                 case "verify":
                     if (dBusConn != null) {
                         System.err.println("verify is not yet implemented via dbus");
-                        System.exit(1);
+                        return 1;
                     }
                     if (!m.userHasKeys()) {
                         System.err.println("User has no keys, first call register.");
-                        System.exit(1);
+                        return 1;
                     }
                     if (m.isRegistered()) {
                         System.err.println("User registration is already verified");
-                        System.exit(1);
+                        return 1;
                     }
                     try {
                         m.verifyAccount(ns.getString("verificationCode"));
                     } catch (IOException e) {
                         System.err.println("Verify error: " + e.getMessage());
-                        System.exit(3);
+                        return 3;
                     }
                     break;
                 case "link":
                     if (dBusConn != null) {
                         System.err.println("link is not yet implemented via dbus");
-                        System.exit(1);
+                        return 1;
                     }
 
                     // When linking, username is null and we always have to create keys
@@ -168,113 +194,121 @@ public class Main {
                         System.out.println("Associated with: " + m.getUsername());
                     } catch (TimeoutException e) {
                         System.err.println("Link request timed out, please try again.");
-                        System.exit(3);
+                        return 3;
                     } catch (IOException e) {
                         System.err.println("Link request error: " + e.getMessage());
-                        System.exit(3);
+                        return 3;
+                    } catch (AssertionError e) {
+                        handleAssertionError(e);
+                        return 1;
                     } catch (InvalidKeyException e) {
                         e.printStackTrace();
-                        System.exit(3);
+                        return 2;
                     } catch (UserAlreadyExists e) {
                         System.err.println("The user " + e.getUsername() + " already exists\nDelete \"" + e.getFileName() + "\" before trying again.");
-                        System.exit(3);
+                        return 1;
                     }
                     break;
                 case "addDevice":
                     if (dBusConn != null) {
                         System.err.println("link is not yet implemented via dbus");
-                        System.exit(1);
+                        return 1;
                     }
                     if (!m.isRegistered()) {
                         System.err.println("User is not registered.");
-                        System.exit(1);
+                        return 1;
                     }
                     try {
                         m.addDeviceLink(new URI(ns.getString("uri")));
                     } catch (IOException e) {
                         e.printStackTrace();
-                        System.exit(3);
+                        return 3;
                     } catch (InvalidKeyException e) {
                         e.printStackTrace();
-                        System.exit(2);
+                        return 2;
+                    } catch (AssertionError e) {
+                        handleAssertionError(e);
+                        return 1;
                     } catch (URISyntaxException e) {
                         e.printStackTrace();
-                        System.exit(2);
+                        return 2;
                     }
                     break;
                 case "listDevices":
                     if (dBusConn != null) {
                         System.err.println("listDevices is not yet implemented via dbus");
-                        System.exit(1);
+                        return 1;
                     }
                     if (!m.isRegistered()) {
                         System.err.println("User is not registered.");
-                        System.exit(1);
+                        return 1;
                     }
                     try {
                         List<DeviceInfo> devices = m.getLinkedDevices();
                         for (DeviceInfo d : devices) {
                             System.out.println("Device " + d.getId() + (d.getId() == m.getDeviceId() ? " (this device)" : "") + ":");
                             System.out.println(" Name: " + d.getName());
-                            System.out.println(" Created: " + d.getCreated());
-                            System.out.println(" Last seen: " + d.getLastSeen());
+                            System.out.println(" Created: " + formatTimestamp(d.getCreated()));
+                            System.out.println(" Last seen: " + formatTimestamp(d.getLastSeen()));
                         }
                     } catch (IOException e) {
                         e.printStackTrace();
-                        System.exit(3);
+                        return 3;
                     }
                     break;
                 case "removeDevice":
                     if (dBusConn != null) {
                         System.err.println("removeDevice is not yet implemented via dbus");
-                        System.exit(1);
+                        return 1;
                     }
                     if (!m.isRegistered()) {
                         System.err.println("User is not registered.");
-                        System.exit(1);
+                        return 1;
                     }
                     try {
                         int deviceId = ns.getInt("deviceId");
                         m.removeLinkedDevices(deviceId);
                     } catch (IOException e) {
                         e.printStackTrace();
-                        System.exit(3);
+                        return 3;
                     }
                     break;
                 case "send":
                     if (dBusConn == null && !m.isRegistered()) {
                         System.err.println("User is not registered.");
-                        System.exit(1);
+                        return 1;
                     }
 
                     if (ns.getBoolean("endsession")) {
                         if (ns.getList("recipient") == null) {
                             System.err.println("No recipients given");
                             System.err.println("Aborting sending.");
-                            System.exit(1);
+                            return 1;
                         }
                         try {
                             ts.sendEndSessionMessage(ns.<String>getList("recipient"));
                         } catch (IOException e) {
                             handleIOException(e);
+                            return 3;
                         } catch (EncapsulatedExceptions e) {
                             handleEncapsulatedExceptions(e);
+                            return 3;
                         } catch (AssertionError e) {
                             handleAssertionError(e);
+                            return 1;
                         } catch (DBusExecutionException e) {
                             handleDBusExecutionException(e);
-                        } catch (UntrustedIdentityException e) {
-                            e.printStackTrace();
+                            return 1;
                         }
                     } else {
                         String messageText = ns.getString("message");
                         if (messageText == null) {
                             try {
-                                messageText = IOUtils.toString(System.in);
+                                messageText = readAll(System.in);
                             } catch (IOException e) {
                                 System.err.println("Failed to read message from stdin: " + e.getMessage());
                                 System.err.println("Aborting sending.");
-                                System.exit(1);
+                                return 1;
                             }
                         }
 
@@ -291,20 +325,26 @@ public class Main {
                             }
                         } catch (IOException e) {
                             handleIOException(e);
+                            return 3;
                         } catch (EncapsulatedExceptions e) {
                             handleEncapsulatedExceptions(e);
+                            return 3;
                         } catch (AssertionError e) {
                             handleAssertionError(e);
+                            return 1;
                         } catch (GroupNotFoundException e) {
                             handleGroupNotFoundException(e);
+                            return 1;
+                        } catch (NotAGroupMemberException e) {
+                            handleNotAGroupMemberException(e);
+                            return 1;
                         } catch (AttachmentInvalidException e) {
                             System.err.println("Failed to add attachment: " + e.getMessage());
                             System.err.println("Aborting sending.");
-                            System.exit(1);
+                            return 1;
                         } catch (DBusExecutionException e) {
                             handleDBusExecutionException(e);
-                        } catch (UntrustedIdentityException e) {
-                            e.printStackTrace();
+                            return 1;
                         }
                     }
 
@@ -315,8 +355,8 @@ public class Main {
                             dBusConn.addSigHandler(Signal.MessageReceived.class, new DBusSigHandler<Signal.MessageReceived>() {
                                 @Override
                                 public void handle(Signal.MessageReceived s) {
-                                    System.out.print(String.format("Envelope from: %s\nTimestamp: %d\nBody: %s\n",
-                                            s.getSender(), s.getTimestamp(), s.getMessage()));
+                                    System.out.print(String.format("Envelope from: %s\nTimestamp: %s\nBody: %s\n",
+                                            s.getSender(), formatTimestamp(s.getTimestamp()), s.getMessage()));
                                     if (s.getGroupId().length > 0) {
                                         System.out.println("Group info:");
                                         System.out.println("  Id: " + Base64.encodeBytes(s.getGroupId()));
@@ -332,22 +372,23 @@ public class Main {
                             });
                         } catch (DBusException e) {
                             e.printStackTrace();
+                            return 1;
                         }
                         while (true) {
                             try {
                                 Thread.sleep(10000);
                             } catch (InterruptedException e) {
-                                System.exit(0);
+                                return 0;
                             }
                         }
                     }
                     if (!m.isRegistered()) {
                         System.err.println("User is not registered.");
-                        System.exit(1);
+                        return 1;
                     }
-                    int timeout = 60;
-                    if (ns.getInt("timeout") != null) {
-                        timeout = ns.getInt("timeout");
+                    double timeout = 5;
+                    if (ns.getDouble("timeout") != null) {
+                        timeout = ns.getDouble("timeout");
                     }
                     boolean returnOnTimeout = true;
                     if (timeout < 0) {
@@ -355,52 +396,53 @@ public class Main {
                         timeout = 3600;
                     }
                     try {
-
-                        for(int i=0; i< 10; i++){
-                            System.out.println("Numero di threads: " +Thread.activeCount());
-                            m.receiveMessages(timeout, returnOnTimeout, new ReceiveMessageHandler(m));
-                        }
-
+                        m.receiveMessages((long) (timeout * 1000), TimeUnit.MILLISECONDS, returnOnTimeout, new ReceiveMessageHandler(m));
                     } catch (IOException e) {
                         System.err.println("Error while receiving messages: " + e.getMessage());
-                        System.exit(3);
+                        return 3;
                     } catch (AssertionError e) {
                         handleAssertionError(e);
+                        return 1;
                     }
                     break;
                 case "quitGroup":
                     if (dBusConn != null) {
                         System.err.println("quitGroup is not yet implemented via dbus");
-                        System.exit(1);
+                        return 1;
                     }
                     if (!m.isRegistered()) {
                         System.err.println("User is not registered.");
-                        System.exit(1);
+                        return 1;
                     }
 
                     try {
                         m.sendQuitGroupMessage(decodeGroupId(ns.getString("group")));
                     } catch (IOException e) {
                         handleIOException(e);
+                        return 3;
                     } catch (EncapsulatedExceptions e) {
                         handleEncapsulatedExceptions(e);
+                        return 3;
                     } catch (AssertionError e) {
                         handleAssertionError(e);
+                        return 1;
                     } catch (GroupNotFoundException e) {
                         handleGroupNotFoundException(e);
-                    } catch (UntrustedIdentityException e) {
-                        e.printStackTrace();
+                        return 1;
+                    } catch (NotAGroupMemberException e) {
+                        handleNotAGroupMemberException(e);
+                        return 1;
                     }
 
                     break;
                 case "updateGroup":
                     if (dBusConn != null) {
                         System.err.println("updateGroup is not yet implemented via dbus");
-                        System.exit(1);
+                        return 1;
                     }
                     if (!m.isRegistered()) {
                         System.err.println("User is not registered.");
-                        System.exit(1);
+                        return 1;
                     }
 
                     try {
@@ -414,27 +456,102 @@ public class Main {
                         }
                     } catch (IOException e) {
                         handleIOException(e);
+                        return 3;
                     } catch (AttachmentInvalidException e) {
                         System.err.println("Failed to add avatar attachment for group\": " + e.getMessage());
                         System.err.println("Aborting sending.");
-                        System.exit(1);
+                        return 1;
                     } catch (GroupNotFoundException e) {
                         handleGroupNotFoundException(e);
+                        return 1;
+                    } catch (NotAGroupMemberException e) {
+                        handleNotAGroupMemberException(e);
+                        return 1;
                     } catch (EncapsulatedExceptions e) {
                         handleEncapsulatedExceptions(e);
-                    } catch (UntrustedIdentityException e) {
-                        e.printStackTrace();
+                        return 3;
                     }
 
+                    break;
+                case "listIdentities":
+                    if (dBusConn != null) {
+                        System.err.println("listIdentities is not yet implemented via dbus");
+                        return 1;
+                    }
+                    if (!m.isRegistered()) {
+                        System.err.println("User is not registered.");
+                        return 1;
+                    }
+                    if (ns.get("number") == null) {
+                        for (Map.Entry<String, List<JsonIdentityKeyStore.Identity>> keys : m.getIdentities().entrySet()) {
+                            for (JsonIdentityKeyStore.Identity id : keys.getValue()) {
+                                printIdentityFingerprint(m, keys.getKey(), id);
+                            }
+                        }
+                    } else {
+                        String number = ns.getString("number");
+                        for (JsonIdentityKeyStore.Identity id : m.getIdentities(number)) {
+                            printIdentityFingerprint(m, number, id);
+                        }
+                    }
+                    break;
+                case "trust":
+                    if (dBusConn != null) {
+                        System.err.println("trust is not yet implemented via dbus");
+                        return 1;
+                    }
+                    if (!m.isRegistered()) {
+                        System.err.println("User is not registered.");
+                        return 1;
+                    }
+                    String number = ns.getString("number");
+                    if (ns.getBoolean("trust_all_known_keys")) {
+                        boolean res = m.trustIdentityAllKeys(number);
+                        if (!res) {
+                            System.err.println("Failed to set the trust for this number, make sure the number is correct.");
+                            return 1;
+                        }
+                    } else {
+                        String fingerprint = ns.getString("verified_fingerprint");
+                        if (fingerprint != null) {
+                            fingerprint = fingerprint.replaceAll(" ", "");
+                            if (fingerprint.length() == 66) {
+                                byte[] fingerprintBytes;
+                                try {
+                                    fingerprintBytes = Hex.toByteArray(fingerprint.toLowerCase(Locale.ROOT));
+                                } catch (Exception e) {
+                                    System.err.println("Failed to parse the fingerprint, make sure the fingerprint is a correctly encoded hex string without additional characters.");
+                                    return 1;
+                                }
+                                boolean res = m.trustIdentityVerified(number, fingerprintBytes);
+                                if (!res) {
+                                    System.err.println("Failed to set the trust for the fingerprint of this number, make sure the number and the fingerprint are correct.");
+                                    return 1;
+                                }
+                            } else if (fingerprint.length() == 60) {
+                                boolean res = m.trustIdentityVerifiedSafetyNumber(number, fingerprint);
+                                if (!res) {
+                                    System.err.println("Failed to set the trust for the safety number of this phone number, make sure the phone number and the safety number are correct.");
+                                    return 1;
+                                }
+                            } else {
+                                System.err.println("Fingerprint has invalid format, either specify the old hex fingerprint or the new safety number");
+                                return 1;
+                            }
+                        } else {
+                            System.err.println("You need to specify the fingerprint you have verified with -v FINGERPRINT");
+                            return 1;
+                        }
+                    }
                     break;
                 case "daemon":
                     if (dBusConn != null) {
                         System.err.println("Stop it.");
-                        System.exit(1);
+                        return 1;
                     }
                     if (!m.isRegistered()) {
                         System.err.println("User is not registered.");
-                        System.exit(1);
+                        return 1;
                     }
                     DBusConnection conn = null;
                     try {
@@ -450,15 +567,16 @@ public class Main {
                             conn.requestBusName(SIGNAL_BUSNAME);
                         } catch (DBusException e) {
                             e.printStackTrace();
-                            System.exit(3);
+                            return 2;
                         }
                         try {
-                            m.receiveMessages(3600, false, new DbusReceiveMessageHandler(m, conn));
+                            m.receiveMessages(1, TimeUnit.HOURS, false, new DbusReceiveMessageHandler(m, conn));
                         } catch (IOException e) {
                             System.err.println("Error while receiving messages: " + e.getMessage());
-                            System.exit(3);
+                            return 3;
                         } catch (AssertionError e) {
                             handleAssertionError(e);
+                            return 1;
                         }
                     } finally {
                         if (conn != null) {
@@ -468,7 +586,7 @@ public class Main {
 
                     break;
             }
-            System.exit(0);
+            return 0;
         } finally {
             if (dBusConn != null) {
                 dBusConn.disconnect();
@@ -476,16 +594,37 @@ public class Main {
         }
     }
 
+    private static void printIdentityFingerprint(Manager m, String theirUsername, JsonIdentityKeyStore.Identity theirId) {
+        String digits = formatSafetyNumber(m.computeSafetyNumber(theirUsername, theirId.identityKey));
+        System.out.println(String.format("%s: %s Added: %s Fingerprint: %s Safety Number: %s", theirUsername,
+                theirId.trustLevel, theirId.added, Hex.toStringCondensed(theirId.getFingerprint()), digits));
+    }
+
+    private static String formatSafetyNumber(String digits) {
+        final int partCount = 12;
+        int partSize = digits.length() / partCount;
+        StringBuilder f = new StringBuilder(digits.length() + partCount);
+        for (int i = 0; i < partCount; i++) {
+            f.append(digits.substring(i * partSize, (i * partSize) + partSize)).append(" ");
+        }
+        return f.toString();
+    }
+
     private static void handleGroupNotFoundException(GroupNotFoundException e) {
         System.err.println("Failed to send to group: " + e.getMessage());
         System.err.println("Aborting sending.");
-        System.exit(1);
     }
+
+    private static void handleNotAGroupMemberException(NotAGroupMemberException e) {
+        System.err.println("Failed to send to group: " + e.getMessage());
+        System.err.println("Update the group on another device to readd the user to this group.");
+        System.err.println("Aborting sending.");
+    }
+
 
     private static void handleDBusExecutionException(DBusExecutionException e) {
         System.err.println("Cannot connect to dbus: " + e.getMessage());
         System.err.println("Aborting.");
-        System.exit(1);
     }
 
     private static byte[] decodeGroupId(String groupId) {
@@ -584,9 +723,24 @@ public class Main {
                 .nargs("*")
                 .help("Specify one or more members to add to the group");
 
+        Subparser parserListIdentities = subparsers.addParser("listIdentities");
+        parserListIdentities.addArgument("-n", "--number")
+                .help("Only show identity keys for the given phone number.");
+
+        Subparser parserTrust = subparsers.addParser("trust");
+        parserTrust.addArgument("number")
+                .help("Specify the phone number, for which to set the trust.")
+                .required(true);
+        MutuallyExclusiveGroup mutTrust = parserTrust.addMutuallyExclusiveGroup();
+        mutTrust.addArgument("-a", "--trust-all-known-keys")
+                .help("Trust all known keys of this user, only use this for testing.")
+                .action(Arguments.storeTrue());
+        mutTrust.addArgument("-v", "--verified-fingerprint")
+                .help("Specify the fingerprint of the key, only use this option if you have verified the fingerprint.");
+
         Subparser parserReceive = subparsers.addParser("receive");
         parserReceive.addArgument("-t", "--timeout")
-                .type(int.class)
+                .type(double.class)
                 .help("Number of seconds to wait for new messages (negative values disable timeout)");
 
         Subparser parserDaemon = subparsers.addParser("daemon");
@@ -628,7 +782,6 @@ public class Main {
         System.err.println("Failed to send/receive message (Assertion): " + e.getMessage());
         e.printStackTrace();
         System.err.println("If you use an Oracle JRE please check if you have unlimited strength crypto enabled, see README");
-        System.exit(1);
     }
 
     private static void handleEncapsulatedExceptions(EncapsulatedExceptions e) {
@@ -648,6 +801,18 @@ public class Main {
         System.err.println("Failed to send message: " + e.getMessage());
     }
 
+    private static String readAll(InputStream in) throws IOException {
+        StringWriter output = new StringWriter();
+        byte[] buffer = new byte[4096];
+        long count = 0;
+        int n;
+        while (-1 != (n = System.in.read(buffer))) {
+            output.write(new String(buffer, 0, n, Charset.defaultCharset()));
+            count += n;
+        }
+        return output.toString();
+    }
+
     private static class ReceiveMessageHandler implements Manager.ReceiveMessageHandler {
         final Manager m;
 
@@ -656,23 +821,34 @@ public class Main {
         }
 
         @Override
-        public void handleMessage(SignalServiceEnvelope envelope, SignalServiceContent content, GroupInfo group) {
+        public void handleMessage(SignalServiceEnvelope envelope, SignalServiceContent content, Throwable exception) {
             SignalServiceAddress source = envelope.getSourceAddress();
-            System.out.println(String.format("Envelope from: %s (device: %d)", source.getNumber(), envelope.getSourceDevice()));
+            ContactInfo sourceContact = m.getContact(source.getNumber());
+            System.out.println(String.format("Envelope from: %s (device: %d)", (sourceContact == null ? "" : "“" + sourceContact.name + "” ") + source.getNumber(), envelope.getSourceDevice()));
             if (source.getRelay().isPresent()) {
                 System.out.println("Relayed by: " + source.getRelay().get());
             }
-            System.out.println("Timestamp: " + envelope.getTimestamp());
+            System.out.println("Timestamp: " + formatTimestamp(envelope.getTimestamp()));
 
             if (envelope.isReceipt()) {
                 System.out.println("Got receipt.");
             } else if (envelope.isSignalMessage() | envelope.isPreKeySignalMessage()) {
+                if (exception != null) {
+                    if (exception instanceof org.whispersystems.libsignal.UntrustedIdentityException) {
+                        org.whispersystems.libsignal.UntrustedIdentityException e = (org.whispersystems.libsignal.UntrustedIdentityException) exception;
+                        System.out.println("The user’s key is untrusted, either the user has reinstalled Signal or a third party sent this message.");
+                        System.out.println("Use 'signal-cli -u " + m.getUsername() + " listIdentities -n " + e.getName() + "', verify the key and run 'signal-cli -u " + m.getUsername() + " trust -v \"FINGER_PRINT\" " + e.getName() + "' to mark it as trusted");
+                        System.out.println("If you don't care about security, use 'signal-cli -u " + m.getUsername() + " trust -a " + e.getName() + "' to trust it without verification");
+                    } else {
+                        System.out.println("Exception: " + exception.getMessage() + " (" + exception.getClass().getSimpleName() + ")");
+                    }
+                }
                 if (content == null) {
                     System.out.println("Failed to decrypt message.");
                 } else {
                     if (content.getDataMessage().isPresent()) {
                         SignalServiceDataMessage message = content.getDataMessage().get();
-                        handleSignalServiceDataMessage(message, group);
+                        handleSignalServiceDataMessage(message);
                     }
                     if (content.getSyncMessage().isPresent()) {
                         System.out.println("Received a sync message");
@@ -689,7 +865,8 @@ public class Main {
                         if (syncMessage.getRead().isPresent()) {
                             System.out.println("Received sync read messages list");
                             for (ReadMessage rm : syncMessage.getRead().get()) {
-                                System.out.println("From: " + rm.getSender() + " Message timestamp: " + rm.getTimestamp());
+                                ContactInfo fromContact = m.getContact(rm.getSender());
+                                System.out.println("From: " + (fromContact == null ? "" : "“" + fromContact.name + "” ") + rm.getSender() + " Message timestamp: " + formatTimestamp(rm.getTimestamp()));
                             }
                         }
                         if (syncMessage.getRequest().isPresent()) {
@@ -704,9 +881,28 @@ public class Main {
                         if (syncMessage.getSent().isPresent()) {
                             System.out.println("Received sync sent message");
                             final SentTranscriptMessage sentTranscriptMessage = syncMessage.getSent().get();
-                            System.out.println("To: " + (sentTranscriptMessage.getDestination().isPresent() ? sentTranscriptMessage.getDestination().get() : "Unknown") + " , Message timestamp: " + sentTranscriptMessage.getTimestamp());
+                            String to;
+                            if (sentTranscriptMessage.getDestination().isPresent()) {
+                                String dest = sentTranscriptMessage.getDestination().get();
+                                ContactInfo destContact = m.getContact(dest);
+                                to = (destContact == null ? "" : "“" + destContact.name + "” ") + dest;
+                            } else {
+                                to = "Unknown";
+                            }
+                            System.out.println("To: " + to + " , Message timestamp: " + formatTimestamp(sentTranscriptMessage.getTimestamp()));
+                            if (sentTranscriptMessage.getExpirationStartTimestamp() > 0) {
+                                System.out.println("Expiration started at: " + formatTimestamp(sentTranscriptMessage.getExpirationStartTimestamp()));
+                            }
                             SignalServiceDataMessage message = sentTranscriptMessage.getMessage();
-                            handleSignalServiceDataMessage(message, null);
+                            handleSignalServiceDataMessage(message);
+                        }
+                        if (syncMessage.getBlockedList().isPresent()) {
+                            System.out.println("Received sync message with block list");
+                            System.out.println("Blocked numbers:");
+                            final BlockedListMessage blockedList = syncMessage.getBlockedList().get();
+                            for (String number : blockedList.getNumbers()) {
+                                System.out.println(" - " + number);
+                            }
                         }
                     }
                 }
@@ -716,9 +912,8 @@ public class Main {
             System.out.println();
         }
 
-        // TODO remove group parameter
-        private void handleSignalServiceDataMessage(SignalServiceDataMessage message, GroupInfo group) {
-            System.out.println("Message timestamp: " + message.getTimestamp());
+        private void handleSignalServiceDataMessage(SignalServiceDataMessage message) {
+            System.out.println("Message timestamp: " + formatTimestamp(message.getTimestamp()));
 
             if (message.getBody().isPresent()) {
                 System.out.println("Body: " + message.getBody().get());
@@ -727,12 +922,15 @@ public class Main {
                 SignalServiceGroup groupInfo = message.getGroupInfo().get();
                 System.out.println("Group info:");
                 System.out.println("  Id: " + Base64.encodeBytes(groupInfo.getGroupId()));
-                if (groupInfo.getName().isPresent()) {
+                if (groupInfo.getType() == SignalServiceGroup.Type.UPDATE && groupInfo.getName().isPresent()) {
                     System.out.println("  Name: " + groupInfo.getName().get());
-                } else if (group != null) {
-                    System.out.println("  Name: " + group.name);
                 } else {
-                    System.out.println("  Name: <Unknown group>");
+                    GroupInfo group = m.getGroup(groupInfo.getGroupId());
+                    if (group != null) {
+                        System.out.println("  Name: " + group.name);
+                    } else {
+                        System.out.println("  Name: <Unknown group>");
+                    }
                 }
                 System.out.println("  Type: " + groupInfo.getType());
                 if (groupInfo.getMembers().isPresent()) {
@@ -747,6 +945,12 @@ public class Main {
             }
             if (message.isEndSession()) {
                 System.out.println("Is end session");
+            }
+            if (message.isExpirationUpdate()) {
+                System.out.println("Is Expiration update: " + message.isExpirationUpdate());
+            }
+            if (message.getExpiresInSeconds() > 0) {
+                System.out.println("Expires in: " + message.getExpiresInSeconds() + " seconds");
             }
 
             if (message.getAttachments().isPresent()) {
@@ -780,8 +984,8 @@ public class Main {
         }
 
         @Override
-        public void handleMessage(SignalServiceEnvelope envelope, SignalServiceContent content, GroupInfo group) {
-            super.handleMessage(envelope, content, group);
+        public void handleMessage(SignalServiceEnvelope envelope, SignalServiceContent content, Throwable exception) {
+            super.handleMessage(envelope, content, exception);
 
             if (!envelope.isReceipt() && content != null && content.getDataMessage().isPresent()) {
                 SignalServiceDataMessage message = content.getDataMessage().get();
@@ -813,17 +1017,12 @@ public class Main {
             }
         }
 
-        private void printAttachment(SignalServiceAttachment attachment) {
-            System.out.println("- " + attachment.getContentType() + " (" + (attachment.isPointer() ? "Pointer" : "") + (attachment.isStream() ? "Stream" : "") + ")");
-            if (attachment.isPointer()) {
-                final SignalServiceAttachmentPointer pointer = attachment.asPointer();
-                System.out.println("  Id: " + pointer.getId() + " Key length: " + pointer.getKey().length + (pointer.getRelay().isPresent() ? " Relay: " + pointer.getRelay().get() : ""));
-                System.out.println("  Size: " + (pointer.getSize().isPresent() ? pointer.getSize().get() + " bytes" : "<unavailable>") + (pointer.getPreview().isPresent() ? " (Preview is available: " + pointer.getPreview().get().length + " bytes)" : ""));
-                File file = m.getAttachmentFile(pointer.getId());
-                if (file.exists()) {
-                    System.out.println("  Stored plaintext in: " + file);
-                }
-            }
-        }
+    }
+
+    private static String formatTimestamp(long timestamp) {
+        Date date = new Date(timestamp);
+        final DateFormat df = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"); // Quoted "Z" to indicate UTC, no timezone offset
+        df.setTimeZone(tzUTC);
+        return timestamp + " (" + df.format(date) + ")";
     }
 }

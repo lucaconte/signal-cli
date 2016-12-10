@@ -13,6 +13,7 @@ import org.whispersystems.libsignal.state.SignalProtocolStore;
 import org.whispersystems.libsignal.state.SignedPreKeyRecord;
 
 import java.util.List;
+import java.util.Map;
 
 class JsonSignalProtocolStore implements SignalProtocolStore {
 
@@ -64,13 +65,25 @@ class JsonSignalProtocolStore implements SignalProtocolStore {
     }
 
     @Override
-    public void saveIdentity(String name, IdentityKey identityKey) {
-        identityKeyStore.saveIdentity(name, identityKey);
+    public void saveIdentity(SignalProtocolAddress address, IdentityKey identityKey) {
+        identityKeyStore.saveIdentity(address, identityKey);
+    }
+
+    public void saveIdentity(String name, IdentityKey identityKey, TrustLevel trustLevel) {
+        identityKeyStore.saveIdentity(name, identityKey, trustLevel, null);
+    }
+
+    public Map<String, List<JsonIdentityKeyStore.Identity>> getIdentities() {
+        return identityKeyStore.getIdentities();
+    }
+
+    public List<JsonIdentityKeyStore.Identity> getIdentities(String name) {
+        return identityKeyStore.getIdentities(name);
     }
 
     @Override
-    public boolean isTrustedIdentity(String name, IdentityKey identityKey) {
-        return identityKeyStore.isTrustedIdentity(name, identityKey);
+    public boolean isTrustedIdentity(SignalProtocolAddress address, IdentityKey identityKey) {
+        return identityKeyStore.isTrustedIdentity(address, identityKey);
     }
 
     @Override

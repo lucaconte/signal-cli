@@ -2,13 +2,10 @@ package org.asamk.signal;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-public class ContactInfo {
+public class ThreadInfo {
     @JsonProperty
-    public String name;
+    public String id;
 
     @JsonProperty
-    public String number;
-
-    @JsonProperty
-    public String color;
+    public int messageExpirationTime;
 }

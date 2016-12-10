@@ -19,17 +19,16 @@ public class JsonGroupStore {
     @JsonDeserialize(using = JsonGroupStore.GroupsDeserializer.class)
     private Map<String, GroupInfo> groups = new HashMap<>();
 
-    private static final ObjectMapper jsonProcessot = new ObjectMapper();
+    public static List<GroupInfo> groupsWithLegacyAvatarId = new ArrayList<>();
+
+    private static final ObjectMapper jsonProcessor = new ObjectMapper();
 
     void updateGroup(GroupInfo group) {
         groups.put(Base64.encodeBytes(group.groupId), group);
     }
 
-    GroupInfo getGroup(byte[] groupId) throws GroupNotFoundException {
+    GroupInfo getGroup(byte[] groupId) {
         GroupInfo g = groups.get(Base64.encodeBytes(groupId));
-        if (g == null) {
-            throw new GroupNotFoundException(groupId);
-        }
         return g;
     }
 
@@ -50,7 +49,11 @@ public class JsonGroupStore {
             Map<String, GroupInfo> groups = new HashMap<>();
             JsonNode node = jsonParser.getCodec().readTree(jsonParser);
             for (JsonNode n : node) {
-                GroupInfo g = jsonProcessot.treeToValue(n, GroupInfo.class);
+                GroupInfo g = jsonProcessor.treeToValue(n, GroupInfo.class);
+                // Check if a legacy avatarId exists
+                if (g.getAvatarId() != 0) {
+                    groupsWithLegacyAvatarId.add(g);
+                }
                 groups.put(Base64.encodeBytes(g.groupId), g);
             }
 
